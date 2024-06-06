@@ -1,4 +1,7 @@
 tests/debug_dataset/bridge_dataset/1.0.0/dataset_statistics_*.json
+octo_models/
+octo-small-1.5/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
