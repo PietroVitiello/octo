@@ -32,15 +32,16 @@ from octo.utils.train_utils import (
 
 def main():
 
-    batch_size = 12
+    batch_size = 90
     freeze_transformer = False
-    training_steps = 250000
-    record_every = 100
-    save_every = 5000
+    training_steps = 80000
+    record_every = 200
+    save_every = 2000
 
-    use_wandb = False
-    run_name = "octo_1"
+    use_wandb = True
+    run_name = "octo_3" 
     save_dir = f"/home/pita/Documents/Projects/octo/models/{run_name}"
+    is_original = True
 
     print(f"\n\nHardware acceleration: {xla_bridge.get_backend().platform}")
 
@@ -65,7 +66,10 @@ def main():
     # load pre-trained model
     logging.info("Loading pre-trained model...")
     # pretrained_model = OctoModel.load_pretrained(FLAGS.pretrained_path)
-    pretrained_model = OctoModel.load_pretrained("octo-small-1.5")
+    if is_original:
+        pretrained_model = OctoModel.load_pretrained("octo-small-1.5")
+    else:
+        pretrained_model = OctoModel.load_pretrained("models/octo_1")
     # pretrained_model = TFAutoModel.from_pretrained("rail-berkeley/octo-small-1.5")
     # pretrained_model = TFAutoModel.from_pretrained("rail-berkeley/octo-small")
 
@@ -117,25 +121,28 @@ def main():
     # for key, value in example_batch.items():
     #     print(f"{key}: {value}")
     # print("\n")
-    for key, value in example_batch.items():
-        print(f"{key}")
+    # for key, value in example_batch.items():
+    #     print(f"{key}")
+    # print("")
+    # for key, value in example_batch["observation"].items():
+    #     print(f"{key}: {value}")
 
     print(f"\n\n\n{'-'*20} Dataset loaded {'-'*20}\n\n\n")
+    # print(f"dataset statistics:\n{dataset.dataset_statistics}")
 
-
-    # load pre-training config and modify --> remove wrist cam, add proprio input, change action head
-    # following Zhao et al. we use "action chunks" of length 50 and L1 loss for ALOHA
     config = pretrained_model.config
+    if is_original:
+        # load pre-training config and modify --> remove wrist cam, add proprio input, change action head
+        # following Zhao et al. we use "action chunks" of length 50 and L1 loss for ALOHA
+        del config["model"]["observation_tokenizers"]["wrist"]
 
-    del config["model"]["observation_tokenizers"]["wrist"]
-
-    # Fully override the old action head with a new one (for smaller changes, you can use update_config)
-    config["model"]["heads"]["action"] = ModuleSpec.create(
-        L1ActionHead,
-        action_horizon=1,
-        action_dim=480,
-        readout_key="readout_action",
-    )
+        # Fully override the old action head with a new one (for smaller changes, you can use update_config)
+        config["model"]["heads"]["action"] = ModuleSpec.create(
+            L1ActionHead,
+            action_horizon=1,
+            action_dim=480,
+            readout_key="readout_action",
+        )
 
     # initialize weights for modified Octo model, then merge in all applicable pre-trained weights
     # new position encodings for proprio inputs & weights for new action head will remain "from scratch"
@@ -155,9 +162,22 @@ def main():
 
     # create optimizer & train_state, optionally freeze keys for pre-trained transformer
     # train_state bundles parameters & optimizers
+    reference_lr = 5e-5
+    minimum_lr = 1e-8
+    warmup_steps = 200
+    # learning_rate = optax.join_schedules(
+    #     [optax.linear_schedule(0, 3e-5, 100), optax.constant_schedule(3e-5)], [100]
+    # )
     learning_rate = optax.join_schedules(
-        [optax.linear_schedule(0, 3e-5, 100), optax.constant_schedule(3e-5)], [100]
+        [
+            optax.linear_schedule(0, reference_lr, warmup_steps),
+            optax.linear_schedule(
+                reference_lr, minimum_lr,
+                training_steps - warmup_steps)
+        ],
+        [warmup_steps]
     )
+
     tx = optax.adamw(learning_rate)
     frozen_keys = model.config["optimizer"]["frozen_keys"]
     if freeze_transformer:
